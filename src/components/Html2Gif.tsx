@@ -94,7 +94,7 @@ export default function Html2Gif() {
       iframe.onload = () => resolve();
     });
 
-    // Extra wait for CSS animations to initialize
+    // Wait for CSS animations to initialize
     await new Promise((r) => setTimeout(r, 300));
 
     const iframeDoc = iframe.contentDocument;
@@ -107,6 +107,7 @@ export default function Html2Gif() {
 
     const totalFrames = Math.round(fps * duration);
     const frameDelay = 1000 / fps;
+    const totalDurationMs = duration * 1000;
 
     const gif = new GIF({
       workers: 2,
@@ -116,10 +117,25 @@ export default function Html2Gif() {
       workerScript: getWorkerUrl(),
     });
 
+    // Use Web Animations API to control animation timeline
+    const animations = iframeDoc.getAnimations();
+    // Pause all animations so we can seek manually
+    animations.forEach((a) => a.pause());
+
     let capturedCount = 0;
 
-    // Capture frames
+    // Capture frames by seeking animations to each time point
     for (let i = 0; i < totalFrames; i++) {
+      const seekTime = (i / totalFrames) * totalDurationMs;
+
+      // Seek all animations to the target time
+      animations.forEach((a) => {
+        a.currentTime = seekTime;
+      });
+
+      // Let the browser repaint at the seeked position
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+
       try {
         const canvas = await html2canvas(iframeDoc.body, {
           width,
@@ -135,7 +151,6 @@ export default function Html2Gif() {
       } catch (e) {
         console.warn("Frame capture error:", e);
       }
-      await new Promise((r) => setTimeout(r, frameDelay));
     }
 
     // Clean up capture iframe
