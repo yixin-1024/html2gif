@@ -38,7 +38,7 @@ const DEFAULT_HTML = `<div class="container">
 type Status = "idle" | "capturing" | "encoding" | "done";
 
 export default function Html2Gif() {
-  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const renderRef = useRef<HTMLDivElement>(null);
   const [code, setCode] = useState(DEFAULT_HTML);
   const [status, setStatus] = useState<Status>("idle");
   const [progress, setProgress] = useState(0);
@@ -52,9 +52,6 @@ export default function Html2Gif() {
   const [duration, setDuration] = useState(2);
   const [quality, setQuality] = useState(10);
 
-  // Update preview whenever code changes
-  const previewSrc = `data:text/html;charset=utf-8,${encodeURIComponent(code)}`;
-
   // Clean up old blob URLs
   useEffect(() => {
     return () => {
@@ -63,14 +60,29 @@ export default function Html2Gif() {
   }, [gifUrl]);
 
   const captureGif = useCallback(async () => {
-    if (!iframeRef.current?.contentDocument?.body) return;
-
     setStatus("capturing");
     setProgress(0);
     if (gifUrl) {
       URL.revokeObjectURL(gifUrl);
       setGifUrl(null);
     }
+
+    // Create an offscreen render container
+    const container = document.createElement("div");
+    container.style.cssText = `position:fixed;left:-9999px;top:0;width:${width}px;height:${height}px;overflow:hidden;z-index:-1;`;
+    document.body.appendChild(container);
+
+    // Inject HTML content via shadow DOM to isolate styles
+    const shadow = container.attachShadow({ mode: "open" });
+    const wrapper = document.createElement("div");
+    wrapper.style.cssText = `width:${width}px;height:${height}px;overflow:hidden;`;
+    wrapper.innerHTML = code;
+
+    // Move <style> tags into shadow DOM properly
+    shadow.appendChild(wrapper);
+
+    // Wait for styles/animations to kick in
+    await new Promise((r) => setTimeout(r, 200));
 
     const totalFrames = Math.round(fps * duration);
     const frameDelay = 1000 / fps;
@@ -86,25 +98,24 @@ export default function Html2Gif() {
     // Capture frames
     for (let i = 0; i < totalFrames; i++) {
       try {
-        const canvas = await html2canvas(
-          iframeRef.current.contentDocument.body,
-          {
-            width,
-            height,
-            scale: 1,
-            useCORS: true,
-            backgroundColor: null,
-            logging: false,
-          }
-        );
+        const canvas = await html2canvas(wrapper, {
+          width,
+          height,
+          scale: 1,
+          useCORS: true,
+          backgroundColor: null,
+          logging: false,
+        });
         gif.addFrame(canvas, { delay: frameDelay, copy: true });
         setProgress(Math.round(((i + 1) / totalFrames) * 50));
-      } catch {
-        // skip failed frame
+      } catch (e) {
+        console.error("Frame capture error:", e);
       }
-      // Wait for next frame
       await new Promise((r) => setTimeout(r, frameDelay));
     }
+
+    // Clean up offscreen container
+    document.body.removeChild(container);
 
     setStatus("encoding");
 
@@ -248,13 +259,15 @@ export default function Html2Gif() {
             Live Preview
           </div>
           <iframe
-            ref={iframeRef}
-            src={previewSrc}
+            srcDoc={code}
             style={{ width, height }}
             className="max-w-full bg-white"
-            sandbox="allow-scripts allow-same-origin"
+            sandbox="allow-scripts"
           />
         </div>
+
+        {/* Hidden render target */}
+        <div ref={renderRef} style={{ display: "none" }} />
 
         {/* GIF Result */}
         {gifUrl && (
