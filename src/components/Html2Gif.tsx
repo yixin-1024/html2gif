@@ -2,7 +2,7 @@
 
 import { useRef, useState, useCallback, useEffect } from "react";
 import Editor from "@monaco-editor/react";
-import html2canvas from "html2canvas";
+import { toCanvas } from "html-to-image";
 import GIF from "gif.js";
 
 const DEFAULT_HTML = `<div class="container">
@@ -94,17 +94,6 @@ export default function Html2Gif() {
       iframe.onload = () => resolve();
     });
 
-    // Wait for CSS animations to initialize
-    await new Promise((r) => setTimeout(r, 300));
-
-    const iframeDoc = iframe.contentDocument;
-    if (!iframeDoc?.body) {
-      setStatus("error");
-      setErrorMsg("Failed to access iframe content");
-      document.body.removeChild(iframe);
-      return;
-    }
-
     const totalFrames = Math.round(fps * duration);
     const frameDelay = 1000 / fps;
     const totalDurationMs = duration * 1000;
@@ -117,43 +106,47 @@ export default function Html2Gif() {
       workerScript: getWorkerUrl(),
     });
 
-    // Use Web Animations API to control animation timeline
-    const animations = iframeDoc.getAnimations();
-    // Pause all animations so we can seek manually
-    animations.forEach((a) => a.pause());
-
     let capturedCount = 0;
 
-    // Capture frames by seeking animations to each time point
+    // For each frame: inject CSS to freeze animation at the target time, then capture
     for (let i = 0; i < totalFrames; i++) {
       const seekTime = (i / totalFrames) * totalDurationMs;
 
-      // Seek all animations to the target time
-      animations.forEach((a) => {
-        a.currentTime = seekTime;
+      // Create a fresh iframe for each frame with animation frozen at seekTime
+      const frameIframe = document.createElement("iframe");
+      frameIframe.style.cssText = `position:fixed;left:-9999px;top:0;width:${width}px;height:${height}px;border:none;`;
+      // Inject CSS that freezes all animations at the target time
+      const freezeCSS = `<style>*, *::before, *::after { animation-play-state: paused !important; animation-delay: -${seekTime}ms !important; }</style>`;
+      frameIframe.srcdoc = freezeCSS + code;
+      document.body.appendChild(frameIframe);
+
+      await new Promise<void>((resolve) => {
+        frameIframe.onload = () => resolve();
       });
+      // Let the browser fully render
+      await new Promise((r) => setTimeout(r, 50));
 
-      // Let the browser repaint at the seeked position
-      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-
-      try {
-        const canvas = await html2canvas(iframeDoc.body, {
-          width,
-          height,
-          scale: 1,
-          useCORS: true,
-          backgroundColor: null,
-          logging: false,
-        });
-        gif.addFrame(canvas, { delay: frameDelay, copy: true });
-        capturedCount++;
-        setProgress(Math.round(((i + 1) / totalFrames) * 50));
-      } catch (e) {
-        console.warn("Frame capture error:", e);
+      const frameDoc = frameIframe.contentDocument;
+      if (frameDoc?.body) {
+        try {
+          const canvas = await toCanvas(frameDoc.body, {
+            width,
+            height,
+            canvasWidth: width,
+            canvasHeight: height,
+            pixelRatio: 1,
+          });
+          gif.addFrame(canvas, { delay: frameDelay, copy: true });
+          capturedCount++;
+        } catch (e) {
+          console.warn("Frame capture error:", e);
+        }
       }
+      document.body.removeChild(frameIframe);
+      setProgress(Math.round(((i + 1) / totalFrames) * 50));
     }
 
-    // Clean up capture iframe
+    // Clean up the preview capture iframe
     document.body.removeChild(iframe);
 
     if (capturedCount === 0) {
