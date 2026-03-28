@@ -80,7 +80,7 @@ export default function Html2Gif() {
       quality,
       width,
       height,
-      workerScript: "/gif.worker.js",
+      workerScript: `${process.env.NEXT_PUBLIC_BASE_PATH || ""}/gif.worker.js`,
     });
 
     // Capture frames
